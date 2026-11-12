@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#122b3b">
+  <title>A 股到价提醒</title>
+  <style>
+    :root { color-scheme: light; font: 16px/1.5 Inter, "Microsoft YaHei", system-ui, sans-serif; color: #122b3b; background: #f3f6f6; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    main { max-width: 850px; margin: auto; padding: 26px 16px 36px; }
+    header { background: #122b3b; color: #fff; border-radius: 16px; padding: 24px; }
+    h1, h2, p { margin: 0; }
+    h1 { font-size: clamp(25px, 6vw, 38px); line-height: 1.2; }
+    h2 { font-size: 19px; }
+    header p { color: #c8e2e1; margin-top: 8px; }
+    section, form { background: #fff; border: 1px solid #d5e2e1; border-radius: 14px; margin-top: 14px; padding: 15px; }
+    form { display: grid; grid-template-columns: 1fr 1fr auto; gap: 9px; align-items: end; }
+    label { display: grid; gap: 4px; font-size: 14px; }
+    input, button { min-height: 42px; border-radius: 8px; font: inherit; }
+    input { width: 100%; border: 1px solid #aebfbe; padding: 7px 9px; }
+    button { padding: 6px 12px; border: 1px solid #aebfbe; color: #123943; background: #f4f8f7; cursor: pointer; }
+    button[type="submit"] { color: white; background: #086b61; border-color: #086b61; }
+    .toolbar, .actions { display: flex; gap: 7px; align-items: center; }
+    .toolbar { justify-content: space-between; }
+    #status, small { color: #50656c; }
+    #status { font-size: 13px; margin: 6px 0; }
+    #feedback { grid-column: 1 / -1; font-size: 14px; }
+    #feedback:empty { display: none; }
+    .row { display: grid; grid-template-columns: 1.4fr 1fr 1fr auto; gap: 8px; align-items: center; padding: 12px 0; border-top: 1px solid #e0e8e8; }
+    .row small, .row strong { display: block; }
+    .number { font-variant-numeric: tabular-nums; }
+    .hit { color: #076c52; font-weight: 700; }
+    #alerts { background: #dff5ed; border-color: #a9dccc; }
+    #alert-list { margin: 8px 0 0; padding-left: 22px; }
+    @media (max-width: 520px) {
+      header { padding: 18px; }
+      form { grid-template-columns: 1fr 1fr; }
+      form button { grid-column: 1 / -1; }
+      .row { grid-template-columns: 1.2fr 1fr 1fr; }
+      .actions { grid-column: 1 / -1; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>A 股到价提醒</h1>
+    <p>盘中报价低于或等于提醒价时，页面会提示。</p>
+  </header>
+  <section id="alerts" aria-live="polite" hidden>
+    <div class="toolbar"><h2>到价提醒</h2><button id="clear" type="button">清除</button></div>
+    <ul id="alert-list"></ul>
+  </section>
+  <form id="settings">
+    <label>沪深 A 股代码<input id="code" inputmode="numeric" maxlength="6" placeholder="例如 600941" required></label>
+    <label>提醒价（元）<input id="threshold" inputmode="decimal" placeholder="例如 98.00" required></label>
+    <button type="submit">添加或更新</button>
+    <p id="feedback" role="status"></p>
+  </form>
+  <section>
+    <div class="toolbar"><h2>自选股票</h2><button id="refresh" type="button">立即刷新</button></div>
+    <p id="status" role="status">正在读取腾讯行情…</p>
+    <div id="watchlist"></div>
+  </section>
+</main>
+<script>
+  "use strict";
+  const defaults = [
+    ["600941", "中国移动", 98], ["601318", "中国平安", 52],
+    ["000895", "双汇发展", 23.5], ["600900", "长江电力", 25],
+    ["600377", "宁沪高速", 12.25],
+  ];
+  const storageKey = "a-share-alert.watchlist.v1";
+  const symbolFor = (code) => /^6\d{5}$/.test(code) ? "sh" + code :
+    /^[03]\d{5}$/.test(code) ? "sz" + code : null;
+  const validPrice = (value) => Number.isFinite(value) && value > 0;
+  const money = (value) => value.toFixed(2);
+  const beijingTime = new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+  });
+
+  function loadList() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(storageKey));
+      if (Array.isArray(saved)) {
+        return new Map(saved.filter((row) => Array.isArray(row) &&
+          typeof row[0] === "string" && symbolFor(row[0]) && validPrice(row[2]))
+          .map(([code, name, target]) => [code, { name: typeof name === "string" ? name : "", target }]));
+      }
+    } catch { /* Default list is available when browser storage is unavailable. */ }
+    return new Map(defaults.map(([code, name, target]) => [code, { name, target }]));
+  }
+
+  function parseQuotes(raw) {
+    const result = new Map();
+    for (const match of raw.matchAll(/v_((?:sh|sz)\d{6})="([^"]*)"/g)) {
+      const fields = match[2].split("~");
+      const code = match[1].slice(2);
+      const price = Number(fields[3]);
+      const date = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})$/.exec(fields[30]);
+      if (fields[2] !== code || !validPrice(price) || !date) continue;
+      const [, y, m, d, h, min, s] = date;
+      const stamp = Date.parse(`${y}-${m}-${d}T${h}:${min}:${s}+08:00`);
+      if (Number.isFinite(stamp)) result.set(code, { name: fields[1], price, stamp });
+    }
+    return result;
+  }
+
+  function session(timestamp) {
+    const local = new Date(timestamp + 8 * 3600000);
+    const weekday = local.getUTCDay();
+    if (weekday === 0 || weekday === 6) return 0;
+    const minute = local.getUTCHours() * 60 + local.getUTCMinutes();
+    if (minute >= 570 && minute < 690) return 1;
+    if (minute >= 780 && minute < 900) return 2;
+    return 0;
+  }
+
+  function fresh(now, stamp) {
+    const age = now - stamp;
+    return session(now) > 0 && session(now) === session(stamp) && age >= -10000 && age <= 180000;
+  }
+
+  const stocks = loadList();
+  const quotes = new Map();
+  const alerted = new Set();
+  const $ = (id) => document.getElementById(id);
+  let unavailable = new Set();
+  let busy = false;
+  let pending = false;
+
+  function persist() {
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(
+        [...stocks].map(([code, { name, target }]) => [code, name, target])));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function cell(label, value, className) {
+    const container = document.createElement("div");
+    const caption = document.createElement("small");
+    const text = document.createElement("strong");
+    caption.textContent = label;
+    text.textContent = value;
+    if (className) text.className = className;
+    container.append(caption, text);
+    return container;
+  }
+
+  function render() {
+    const list = $("watchlist");
+    const now = Date.now();
+    list.replaceChildren();
+    if (!stocks.size) list.textContent = "输入股票代码和提醒价开始监测。";
+    for (const [code, stock] of stocks) {
+      const quote = quotes.get(code);
+      const ready = quote && !unavailable.has(code) && fresh(now, quote.stamp);
+      const hit = ready && quote.price <= stock.target;
+      const state = unavailable.has(code) ? "行情不可用" : !quote ? "等待报价" :
+        ready ? (hit ? "已到价" : "观察中") : session(now) ? "报价过期" : "休市参考";
+      const row = document.createElement("article");
+      row.className = "row";
+      const actions = document.createElement("div");
+      actions.className = "actions";
+      for (const [title, action] of [["改价", "edit"], ["删除", "remove"]]) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = title;
+        button.setAttribute("aria-label", title + " " + (quote?.name || stock.name || code));
+        button.dataset.action = action;
+        button.dataset.code = code;
+        actions.append(button);
+      }
+      row.append(
+        cell(code, quote?.name || stock.name || code),
+        cell(quote ? "报价 " + beijingTime.format(quote.stamp) : "报价", quote ? money(quote.price) : "—", "number"),
+        cell("提醒价 · " + state, money(stock.target), hit ? "number hit" : "number"),
+        actions,
+      );
+      list.append(row);
+    }
+  }
+
+  function recordAlert(code, stock, quote) {
+    const item = document.createElement("li");
+    item.textContent = `${beijingTime.format(quote.stamp)}  ${quote.name || stock.name || code} ${money(quote.price)} 元，提醒价 ${money(stock.target)} 元`;
+    $("alert-list").prepend(item);
+    if ($("alert-list").children.length > 30) $("alert-list").lastElementChild.remove();
+    $("alerts").hidden = false;
+  }
+
+  async function refresh() {
+    if (busy) {
+      pending = true;
+      return;
+    }
+    if (!stocks.size) {
+      $("status").textContent = "当前没有自选股票。";
+      return;
+    }
+    busy = true;
+    const codes = [...stocks.keys()];
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 9000);
+    try {
+      const received = new Map();
+      for (let i = 0; i < codes.length; i += 40) {
+        const symbols = codes.slice(i, i + 40).map(symbolFor).join(",");
+        const response = await fetch("https://qt.gtimg.cn/q=" + symbols, {
+          cache: "no-store", signal: controller.signal, credentials: "omit",
+        });
+        if (!response.ok) throw new Error("行情读取失败");
+        const raw = new TextDecoder("gbk").decode(await response.arrayBuffer());
+        for (const [code, quote] of parseQuotes(raw)) received.set(code, quote);
+      }
+      if (!received.size) throw new Error("无有效报价");
+      const now = Date.now();
+      unavailable = new Set(codes.filter((code) => !received.has(code)));
+      for (const [code, quote] of received) {
+        const stock = stocks.get(code);
+        if (!stock) continue;
+        quotes.set(code, quote);
+        if (!fresh(now, quote.stamp)) continue;
+        if (quote.price > stock.target) alerted.delete(code);
+        else if (!alerted.has(code)) {
+          alerted.add(code);
+          recordAlert(code, stock, quote);
+        }
+      }
+      $("status").textContent = "腾讯行情 · 最近查询 " + beijingTime.format(now) + "（北京时间）";
+    } catch {
+      unavailable = new Set(codes);
+      $("status").textContent = "暂时无法读取腾讯行情，稍后自动重试。";
+    } finally {
+      clearTimeout(timeout);
+      render();
+      busy = false;
+      if (pending) {
+        pending = false;
+        refresh();
+      }
+    }
+  }
+
+  $("settings").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const code = $("code").value.trim();
+    const input = $("threshold").value.trim();
+    const target = Number(input);
+    if (!symbolFor(code) || !/^\d+(?:\.\d{1,2})?$/.test(input) || !validPrice(target)) {
+      $("feedback").textContent = "请输入沪深六位股票代码和大于零的提醒价（最多两位小数）。";
+      return;
+    }
+    const previous = stocks.get(code);
+    stocks.set(code, { name: previous?.name || "", target });
+    if (target !== previous?.target) alerted.delete(code);
+    $("feedback").textContent = persist() ? "已保存。" : "浏览器存储不可用，本次设置仅保留在当前页面。";
+    render();
+    refresh();
+  });
+
+  $("watchlist").addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-code]");
+    if (!button) return;
+    const { code, action } = button.dataset;
+    const stock = stocks.get(code);
+    if (!stock) return;
+    if (action === "edit") {
+      $("code").value = code;
+      $("threshold").value = money(stock.target);
+      $("threshold").focus();
+      return;
+    }
+    stocks.delete(code);
+    quotes.delete(code);
+    alerted.delete(code);
+    if ($("code").value === code) {
+      $("code").value = "";
+      $("threshold").value = "";
+    }
+    $("feedback").textContent = persist() ? "已取消监测。" : "已从当前页面移除，浏览器无法保存。";
+    render();
+    if (!stocks.size) $("status").textContent = "当前没有自选股票。";
+  });
+  $("clear").addEventListener("click", () => {
+    $("alert-list").replaceChildren();
+    $("alerts").hidden = true;
+  });
+  $("refresh").addEventListener("click", refresh);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+  render();
+  refresh();
+  setInterval(() => { if (!document.hidden) refresh(); }, 15000);
+</script>
+</body>
+</html>
