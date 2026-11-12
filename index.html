@@ -4,6 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#122b3b">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="apple-touch-icon" href="./icon-192.png">
   <title>A 股到价提醒</title>
   <style>
     :root { color-scheme: light; font: 16px/1.5 Inter, "Microsoft YaHei", system-ui, sans-serif; color: #122b3b; background: #f3f6f6; }
@@ -49,6 +51,10 @@
     <h1>A 股到价提醒</h1>
     <p>盘中报价低于或等于提醒价时，页面会提示。</p>
   </header>
+  <section>
+    <div class="toolbar"><h2>手机通知</h2><button id="notify-phone" type="button" disabled>启用并测试</button></div>
+    <p id="notification-status" role="status">正在准备通知功能…</p>
+  </section>
   <section id="alerts" aria-live="polite" hidden>
     <div class="toolbar"><h2>到价提醒</h2><button id="clear" type="button">清除</button></div>
     <ul id="alert-list"></ul>
@@ -130,6 +136,38 @@
   let unavailable = new Set();
   let busy = false;
   let pending = false;
+  let notificationWorker;
+
+  async function prepareNotifications() {
+    if (!("serviceWorker" in navigator) || !("Notification" in window)) {
+      $("notification-status").textContent = "请用支持通知的浏览器打开。iPhone 请从主屏幕图标进入。";
+      return;
+    }
+    try {
+      await navigator.serviceWorker.register("./sw.js");
+      notificationWorker = await navigator.serviceWorker.ready;
+      $("notify-phone").disabled = false;
+      $("notification-status").textContent = "启用后，保持页面在前台可收到到价通知。";
+    } catch {
+      $("notification-status").textContent = "通知功能暂未就绪，请重新打开网页。";
+    }
+  }
+
+  $("notify-phone").addEventListener("click", async () => {
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission !== "granted") {
+        $("notification-status").textContent = "未获通知权限。可以在系统或浏览器设置中允许通知。";
+        return;
+      }
+      await notificationWorker.showNotification("A 股到价提醒", {
+        body: "这是一条测试通知。", icon: "./icon-192.png", tag: "stock-alert-test",
+      });
+      $("notification-status").textContent = "已发送测试通知。盯盘时请保持页面在前台。";
+    } catch {
+      $("notification-status").textContent = "测试通知未能显示，请检查浏览器和系统的通知权限。";
+    }
+  });
 
   function persist() {
     try {
@@ -192,6 +230,13 @@
     $("alert-list").prepend(item);
     if ($("alert-list").children.length > 30) $("alert-list").lastElementChild.remove();
     $("alerts").hidden = false;
+    if (notificationWorker && Notification.permission === "granted") {
+      notificationWorker.showNotification("股价已到提醒价", {
+        body: item.textContent, icon: "./icon-192.png", tag: "stock-alert-" + code,
+      }).catch(() => {
+        $("notification-status").textContent = "系统通知发送失败，仍可在页面查看到价提醒。";
+      });
+    }
   }
 
   async function refresh() {
@@ -294,6 +339,7 @@
   $("refresh").addEventListener("click", refresh);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
   render();
+  prepareNotifications();
   refresh();
   setInterval(() => { if (!document.hidden) refresh(); }, 15000);
 </script>
