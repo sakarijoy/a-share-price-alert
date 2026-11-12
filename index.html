@@ -54,6 +54,16 @@
   <section>
     <div class="toolbar"><h2>手机通知</h2><button id="notify-phone" type="button" disabled>启用并测试</button></div>
     <p id="notification-status" role="status">正在准备通知功能…</p>
+    <details>
+      <summary>设置锁屏通知</summary>
+      <p>绑定手机后复制配置。自选股或提醒价变更后，请重新复制并更新配置。</p>
+      <p><button id="bind-push" type="button" disabled>绑定这部手机</button>
+      <button id="copy-push" type="button" disabled>复制后台配置</button></p>
+      <p id="push-status" role="status"></p>
+      <p>在 GitHub 把复制的内容保存为名为 <code>STOCK_PUSH_CONFIG</code> 的仓库密钥，再运行一次工作流测试。请把配置只粘贴到密钥输入框。</p>
+      <p><a id="push-secret" href="https://github.com/sakarijoy/a-share-price-alert/settings/secrets/actions" target="_blank" rel="noopener noreferrer">打开 GitHub 密钥设置</a> ·
+      <a href="https://github.com/sakarijoy/a-share-price-alert/actions/workflows/stock-push.yml" target="_blank" rel="noopener noreferrer">打开推送测试</a></p>
+    </details>
   </section>
   <section id="alerts" aria-live="polite" hidden>
     <div class="toolbar"><h2>到价提醒</h2><button id="clear" type="button">清除</button></div>
@@ -137,6 +147,69 @@
   let busy = false;
   let pending = false;
   let notificationWorker;
+  let pushKey;
+  let phoneSubscription;
+  const pushKeyName = "a-share-alert.push-key.v1";
+
+  const encodeKey = (bytes) => btoa(String.fromCharCode(...bytes))
+    .replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+  const decodeKey = (value) => Uint8Array.from(
+    atob(value.replaceAll("-", "+").replaceAll("_", "/")), (char) => char.charCodeAt(0));
+
+  async function preparePush() {
+    if (!notificationWorker.pushManager || !globalThis.crypto?.subtle) {
+      $("push-status").textContent = "此浏览器不支持后台推送。iPhone 请从主屏幕图标打开。";
+      return;
+    }
+    try {
+      pushKey = JSON.parse(localStorage.getItem(pushKeyName));
+      if (!pushKey) {
+        const pair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+        const [publicBytes, privateJwk] = await Promise.all([
+          crypto.subtle.exportKey("raw", pair.publicKey),
+          crypto.subtle.exportKey("jwk", pair.privateKey),
+        ]);
+        pushKey = { publicKey: encodeKey(new Uint8Array(publicBytes)), privateKey: privateJwk.d };
+        localStorage.setItem(pushKeyName, JSON.stringify(pushKey));
+      }
+      const existing = await notificationWorker.pushManager.getSubscription();
+      if (existing?.options.applicationServerKey &&
+          encodeKey(new Uint8Array(existing.options.applicationServerKey)) === pushKey.publicKey) {
+        phoneSubscription = existing;
+        $("copy-push").disabled = false;
+        $("push-status").textContent = "手机已绑定。后台监测使用 GitHub 密钥里保存的那份配置。";
+      } else if (existing) {
+        await existing.unsubscribe();
+      }
+      $("bind-push").disabled = false;
+    } catch {
+      $("push-status").textContent = "无法准备后台推送，请确认浏览器允许通知和本地存储。";
+    }
+  }
+
+  $("bind-push").addEventListener("click", async () => {
+    try {
+      phoneSubscription = await notificationWorker.pushManager.subscribe({
+        userVisibleOnly: true, applicationServerKey: decodeKey(pushKey.publicKey),
+      });
+      $("copy-push").disabled = false;
+      $("push-status").textContent = "手机已绑定。请复制配置并保存到 GitHub。";
+    } catch {
+      $("push-status").textContent = "绑定失败。请检查系统通知权限，然后再试一次。";
+    }
+  });
+
+  $("copy-push").addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify({
+        ...pushKey, subscription: phoneSubscription.toJSON(),
+        targets: [...stocks].map(([code, stock]) => [code, stock.target]),
+      }));
+      $("push-status").textContent = "已复制。请将整段配置粘贴到 GitHub 仓库密钥。";
+    } catch {
+      $("push-status").textContent = "复制失败，请允许浏览器使用剪贴板后重试。";
+    }
+  });
 
   async function prepareNotifications() {
     if (!("serviceWorker" in navigator) || !("Notification" in window)) {
@@ -148,6 +221,7 @@
       notificationWorker = await navigator.serviceWorker.ready;
       $("notify-phone").disabled = false;
       $("notification-status").textContent = "启用后，保持页面在前台可收到到价通知。";
+      preparePush();
     } catch {
       $("notification-status").textContent = "通知功能暂未就绪，请重新打开网页。";
     }

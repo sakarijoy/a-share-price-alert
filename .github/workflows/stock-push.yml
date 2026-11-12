@@ -1,0 +1,68 @@
+name: 手机到价通知
+on:
+  schedule:
+    - cron: '32-59/5 1 * * 1-5'
+    - cron: '2-59/5 2,5,6 * * 1-5'
+    - cron: '2-29/5 3 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'test 发送测试通知，check-feed 检查行情'
+        type: choice
+        options:
+          - test
+          - check-feed
+        default: test
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stock-price-push
+  cancel-in-progress: false
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check notification configuration
+        id: config
+        env:
+          PUSH_CONFIG: ${{ secrets.STOCK_PUSH_CONFIG }}
+          CHECK_FEED: ${{ inputs.mode == 'check-feed' }}
+        run: |
+          if [ "$CHECK_FEED" = "true" ] || [ -n "$PUSH_CONFIG" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          elif [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "::error::Add the STOCK_PUSH_CONFIG repository secret first."
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+        if: steps.config.outputs.enabled == 'true'
+      - name: Get Beijing date
+        id: date
+        if: steps.config.outputs.enabled == 'true' && github.event_name == 'schedule'
+        run: date -u -d '+8 hours' '+day=%F' >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        if: steps.date.outputs.day != ''
+        with:
+          path: .alert-state/sent.json
+          key: stock-push-v1-${{ steps.date.outputs.day }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: stock-push-v1-${{ steps.date.outputs.day }}-
+      - name: Install push library
+        if: steps.config.outputs.enabled == 'true'
+        run: npm install --prefix "$RUNNER_TEMP/stock-push" --ignore-scripts --no-audit --no-fund web-push@3.6.7
+      - name: Send test or check prices
+        id: check
+        if: steps.config.outputs.enabled == 'true'
+        env:
+          STOCK_PUSH_CONFIG: ${{ secrets.STOCK_PUSH_CONFIG }}
+          SEND_TEST: ${{ inputs.mode == 'test' }}
+          CHECK_FEED: ${{ inputs.mode == 'check-feed' }}
+        run: NODE_PATH="$RUNNER_TEMP/stock-push/node_modules" node check-prices.cjs
+      - uses: actions/cache/save@v4
+        if: always() && steps.check.outputs.state_changed == 'true'
+        with:
+          path: .alert-state/sent.json
+          key: stock-push-v1-${{ steps.date.outputs.day }}-${{ github.run_id }}-${{ github.run_attempt }}
