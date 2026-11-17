@@ -54,20 +54,6 @@
     <h1>A 股到价提醒</h1>
     <p>盘中报价满足你设置的价格条件时，页面会提示。</p>
   </header>
-  <section>
-    <div class="toolbar"><h2>手机通知</h2><button id="notify-phone" type="button" disabled>启用并测试</button></div>
-    <p id="notification-status" role="status">正在准备通知功能…</p>
-    <details>
-      <summary>设置锁屏通知</summary>
-      <p>绑定手机后复制配置。自选股或提醒价变更后，请重新复制并更新配置。</p>
-      <p><button id="bind-push" type="button" disabled>绑定这部手机</button>
-      <button id="copy-push" type="button" disabled>复制后台配置</button></p>
-      <p id="push-status" role="status"></p>
-      <p>在 GitHub 把复制的内容保存为名为 <code>STOCK_PUSH_CONFIG</code> 的仓库密钥，再运行一次工作流测试。请把配置只粘贴到密钥输入框。</p>
-      <p><a id="push-secret" href="https://github.com/sakarijoy/a-share-price-alert/settings/secrets/actions" target="_blank" rel="noopener noreferrer">打开 GitHub 密钥设置</a> ·
-      <a href="https://github.com/sakarijoy/a-share-price-alert/actions/workflows/stock-push.yml" target="_blank" rel="noopener noreferrer">打开推送测试</a></p>
-    </details>
-  </section>
   <section id="alerts" aria-live="polite" hidden>
     <div class="toolbar"><h2>到价提醒</h2><button id="clear" type="button">清除</button></div>
     <ul id="alert-list"></ul>
@@ -89,6 +75,20 @@
     <div class="toolbar"><h2>自选股票</h2><button id="refresh" type="button">立即刷新</button></div>
     <p id="status" role="status">正在读取腾讯行情…</p>
     <div id="watchlist"></div>
+  </section>
+  <section>
+    <div class="toolbar"><h2>手机通知</h2><button id="notify-phone" type="button" disabled>启用并测试</button></div>
+    <p id="notification-status" role="status">正在准备通知功能…</p>
+    <details>
+      <summary>设置锁屏通知</summary>
+      <p>绑定手机后复制配置。自选股或提醒价变更后，请重新复制并更新配置。</p>
+      <p><button id="bind-push" type="button" disabled>绑定这部手机</button>
+      <button id="copy-push" type="button" disabled>复制后台配置</button></p>
+      <p id="push-status" role="status"></p>
+      <p>在 GitHub 把复制的内容保存为名为 <code>STOCK_PUSH_CONFIG</code> 的仓库密钥，再运行一次工作流测试。请把配置只粘贴到密钥输入框。</p>
+      <p><a id="push-secret" href="https://github.com/sakarijoy/a-share-price-alert/settings/secrets/actions" target="_blank" rel="noopener noreferrer">打开 GitHub 密钥设置</a> ·
+      <a href="https://github.com/sakarijoy/a-share-price-alert/actions/workflows/stock-push.yml" target="_blank" rel="noopener noreferrer">打开推送测试</a></p>
+    </details>
   </section>
 </main>
 <script>
