@@ -17,31 +17,33 @@
     h1 { font-size: clamp(25px, 6vw, 38px); line-height: 1.2; }
     h2 { font-size: 19px; }
     header p { color: #c8e2e1; margin-top: 8px; }
-    section, form { background: #fff; border: 1px solid #d5e2e1; border-radius: 14px; margin-top: 14px; padding: 15px; }
-    form { display: grid; grid-template-columns: 1fr 1fr 1.4fr auto; gap: 9px; align-items: end; }
-    label { display: grid; gap: 4px; font-size: 14px; }
+    section, #stock-editor { background: #fff; border: 1px solid #d5e2e1; border-radius: 14px; margin-top: 14px; padding: 15px; }
+    #stock-editor summary { cursor: pointer; font-weight: 700; }
+    details p { overflow-wrap: anywhere; }
+    form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.4fr) auto; gap: 9px; align-items: end; margin-top: 12px; }
+    label { display: grid; gap: 4px; min-width: 0; font-size: 14px; }
     input, select, button { min-height: 42px; border-radius: 8px; font: inherit; }
-    input, select { width: 100%; border: 1px solid #aebfbe; padding: 7px 9px; background: white; color: inherit; }
+    input, select { width: 100%; min-width: 0; font-size: 16px; border: 1px solid #aebfbe; padding: 7px 9px; background: white; color: inherit; }
     button { padding: 6px 12px; border: 1px solid #aebfbe; color: #123943; background: #f4f8f7; cursor: pointer; }
     button[type="submit"] { color: white; background: #086b61; border-color: #086b61; }
-    .toolbar, .actions { display: flex; gap: 7px; align-items: center; }
+    .toolbar, .actions { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; }
     .toolbar { justify-content: space-between; }
     #status, small { color: #50656c; }
     #status { font-size: 13px; margin: 6px 0; }
-    #feedback { grid-column: 1 / -1; font-size: 14px; }
+    #feedback { font-size: 14px; margin-top: 6px; }
     #feedback:empty { display: none; }
     .row { display: grid; grid-template-columns: 1.4fr 1fr 1fr auto; gap: 8px; align-items: center; padding: 12px 0; border-top: 1px solid #e0e8e8; }
-    .row small, .row strong { display: block; }
+    .row small, .row strong { display: block; overflow-wrap: anywhere; }
     .number { font-variant-numeric: tabular-nums; }
     .hit { color: #076c52; font-weight: 700; }
     #alerts { background: #dff5ed; border-color: #a9dccc; }
     #alert-list { margin: 8px 0 0; padding-left: 22px; }
     @media (max-width: 520px) {
       header { padding: 18px; }
-      form { grid-template-columns: 1fr 1fr; }
+      form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       form label:last-of-type { grid-column: 1 / -1; }
       form button { grid-column: 1 / -1; }
-      .row { grid-template-columns: 1.2fr 1fr 1fr; }
+      .row { grid-template-columns: minmax(0, 1.2fr) repeat(2, minmax(0, 1fr)); }
       .actions { grid-column: 1 / -1; }
     }
   </style>
@@ -70,7 +72,9 @@
     <div class="toolbar"><h2>到价提醒</h2><button id="clear" type="button">清除</button></div>
     <ul id="alert-list"></ul>
   </section>
-  <form id="settings">
+  <details id="stock-editor">
+    <summary id="editor-summary">添加或更新股票</summary>
+    <form id="settings">
     <label>沪深 A 股代码<input id="code" inputmode="numeric" maxlength="6" placeholder="例如 600941" required></label>
     <label>提醒价（元）<input id="threshold" inputmode="decimal" placeholder="例如 98.00" required></label>
     <label>提醒方向<select id="direction">
@@ -78,8 +82,9 @@
       <option value="gte">≥ 提醒价（卖出提醒）</option>
     </select></label>
     <button type="submit">添加或更新</button>
-    <p id="feedback" role="status"></p>
-  </form>
+    </form>
+  </details>
+  <p id="feedback" role="status"></p>
   <section>
     <div class="toolbar"><h2>自选股票</h2><button id="refresh" type="button">立即刷新</button></div>
     <p id="status" role="status">正在读取腾讯行情…</p>
@@ -157,6 +162,7 @@
   let busy = false;
   let pending = false;
   let notificationWorker;
+  const phoneTestKey = "a-share-alert.phone-tested.v1";
   let pushKey;
   let phoneSubscription;
   const pushKeyName = "a-share-alert.push-key.v1";
@@ -229,8 +235,12 @@
     try {
       await navigator.serviceWorker.register("./sw.js");
       notificationWorker = await navigator.serviceWorker.ready;
+      let tested = false;
+      try { tested = Notification.permission === "granted" && localStorage.getItem(phoneTestKey) === "yes"; }
+      catch { /* Notifications still work without persistent storage. */ }
+      $("notify-phone").hidden = tested;
       $("notify-phone").disabled = false;
-      $("notification-status").textContent = "启用后，保持页面在前台可收到到价通知。";
+      $("notification-status").textContent = tested ? "手机通知已启用。" : "启用后，保持页面在前台可收到到价通知。";
       preparePush();
     } catch {
       $("notification-status").textContent = "通知功能暂未就绪，请重新打开网页。";
@@ -247,6 +257,8 @@
       await notificationWorker.showNotification("A 股到价提醒", {
         body: "这是一条测试通知。", icon: "./icon-192.png", tag: "stock-alert-test",
       });
+      $("notify-phone").hidden = true;
+      try { localStorage.setItem(phoneTestKey, "yes"); } catch { /* Keep hidden for this session. */ }
       $("notification-status").textContent = "已发送测试通知。盯盘时请保持页面在前台。";
     } catch {
       $("notification-status").textContent = "测试通知未能显示，请检查浏览器和系统的通知权限。";
@@ -390,6 +402,8 @@
     stocks.set(code, { name: previous?.name || "", target, direction });
     if (target !== previous?.target || direction !== previous?.direction) alerted.delete(code);
     $("feedback").textContent = persist() ? "已保存。" : "浏览器存储不可用，本次设置仅保留在当前页面。";
+    $("stock-editor").open = false;
+    $("editor-summary").focus({ preventScroll: true });
     render();
     refresh();
   });
@@ -401,10 +415,11 @@
     const stock = stocks.get(code);
     if (!stock) return;
     if (action === "edit") {
+      $("stock-editor").open = true;
       $("code").value = code;
       $("threshold").value = money(stock.target);
       $("direction").value = stock.direction;
-      $("threshold").focus();
+      $("editor-summary").scrollIntoView({ block: "nearest" });
       return;
     }
     stocks.delete(code);
