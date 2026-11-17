@@ -95,7 +95,8 @@ async function main() {
   }
   if (!session(Date.now())) return;
   const targets = new Map(config.targets.filter(([code, value]) =>
-    typeof code === "string" && symbolFor(code) && Number.isFinite(value) && value > 0));
+    typeof code === "string" && symbolFor(code) && Number.isFinite(value) && value > 0)
+    .map(([code, target, direction]) => [code, { target, rising: direction === "gte" }]));
   if (!targets.size) return;
   const sent = new Set(fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath, "utf8")) : []);
   const codes = [...targets.keys()];
@@ -106,13 +107,17 @@ async function main() {
     const trading = session(now);
     for (const code of batch) {
       const quote = quotes.get(code);
-      const target = targets.get(code);
-      if (!quote || quote.price > target || !trading || session(quote.stamp) !== trading ||
+      const { target, rising } = targets.get(code);
+      if (!quote || (rising ? quote.price < target : quote.price > target) ||
+          !trading || session(quote.stamp) !== trading ||
           now - quote.stamp > 180000 || quote.stamp - now > 10000) continue;
-      const key = createHash("sha256").update(config.privateKey + "|" + code + "|" + target).digest("hex");
+      // Keep existing deduplication keys for lower-price rules.
+      const rule = rising ? target + "|gte" : String(target);
+      const key = createHash("sha256").update(config.privateKey + "|" + code + "|" + rule).digest("hex");
       if (sent.has(key)) continue;
-      const body = `${quote.name} ${quote.price.toFixed(2)} 元，提醒价 ${target.toFixed(2)} 元（${chinaTime.format(quote.stamp)}）`;
-      if (await send(config, "股价已到提醒价", body, "stock-alert-" + code)) {
+      const body = `${quote.name} ${quote.price.toFixed(2)} 元，提醒条件 ${rising ? "≥" : "≤"} ${target.toFixed(2)} 元（${chinaTime.format(quote.stamp)}）`;
+      const title = rising ? "股价达到卖出提醒价" : "股价达到买入提醒价";
+      if (await send(config, title, body, "stock-alert-" + code + "-" + (rising ? "gte" : "lte"))) {
         sent.add(key);
         fs.mkdirSync(".alert-state", { recursive: true });
         fs.writeFileSync(statePath, JSON.stringify([...sent]));

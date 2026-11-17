@@ -18,10 +18,10 @@
     h2 { font-size: 19px; }
     header p { color: #c8e2e1; margin-top: 8px; }
     section, form { background: #fff; border: 1px solid #d5e2e1; border-radius: 14px; margin-top: 14px; padding: 15px; }
-    form { display: grid; grid-template-columns: 1fr 1fr auto; gap: 9px; align-items: end; }
+    form { display: grid; grid-template-columns: 1fr 1fr 1.4fr auto; gap: 9px; align-items: end; }
     label { display: grid; gap: 4px; font-size: 14px; }
-    input, button { min-height: 42px; border-radius: 8px; font: inherit; }
-    input { width: 100%; border: 1px solid #aebfbe; padding: 7px 9px; }
+    input, select, button { min-height: 42px; border-radius: 8px; font: inherit; }
+    input, select { width: 100%; border: 1px solid #aebfbe; padding: 7px 9px; background: white; color: inherit; }
     button { padding: 6px 12px; border: 1px solid #aebfbe; color: #123943; background: #f4f8f7; cursor: pointer; }
     button[type="submit"] { color: white; background: #086b61; border-color: #086b61; }
     .toolbar, .actions { display: flex; gap: 7px; align-items: center; }
@@ -39,6 +39,7 @@
     @media (max-width: 520px) {
       header { padding: 18px; }
       form { grid-template-columns: 1fr 1fr; }
+      form label:last-of-type { grid-column: 1 / -1; }
       form button { grid-column: 1 / -1; }
       .row { grid-template-columns: 1.2fr 1fr 1fr; }
       .actions { grid-column: 1 / -1; }
@@ -49,7 +50,7 @@
 <main>
   <header>
     <h1>A 股到价提醒</h1>
-    <p>盘中报价低于或等于提醒价时，页面会提示。</p>
+    <p>盘中报价满足你设置的价格条件时，页面会提示。</p>
   </header>
   <section>
     <div class="toolbar"><h2>手机通知</h2><button id="notify-phone" type="button" disabled>启用并测试</button></div>
@@ -72,6 +73,10 @@
   <form id="settings">
     <label>沪深 A 股代码<input id="code" inputmode="numeric" maxlength="6" placeholder="例如 600941" required></label>
     <label>提醒价（元）<input id="threshold" inputmode="decimal" placeholder="例如 98.00" required></label>
+    <label>提醒方向<select id="direction">
+      <option value="lte">≤ 提醒价（买入提醒）</option>
+      <option value="gte">≥ 提醒价（卖出提醒）</option>
+    </select></label>
     <button type="submit">添加或更新</button>
     <p id="feedback" role="status"></p>
   </form>
@@ -93,6 +98,9 @@
     /^[03]\d{5}$/.test(code) ? "sz" + code : null;
   const validPrice = (value) => Number.isFinite(value) && value > 0;
   const money = (value) => value.toFixed(2);
+  const comparison = (direction) => direction === "gte" ? "≥" : "≤";
+  const alertTitle = (direction) => direction === "gte" ? "股价达到卖出提醒价" : "股价达到买入提醒价";
+  const reached = (price, stock) => stock.direction === "gte" ? price >= stock.target : price <= stock.target;
   const beijingTime = new Intl.DateTimeFormat("zh-CN", {
     timeZone: "Asia/Shanghai", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
   });
@@ -103,10 +111,12 @@
       if (Array.isArray(saved)) {
         return new Map(saved.filter((row) => Array.isArray(row) &&
           typeof row[0] === "string" && symbolFor(row[0]) && validPrice(row[2]))
-          .map(([code, name, target]) => [code, { name: typeof name === "string" ? name : "", target }]));
+          .map(([code, name, target, direction]) => [
+            code, { name: typeof name === "string" ? name : "", target, direction: direction === "gte" ? "gte" : "lte" },
+          ]));
       }
     } catch { /* Default list is available when browser storage is unavailable. */ }
-    return new Map(defaults.map(([code, name, target]) => [code, { name, target }]));
+    return new Map(defaults.map(([code, name, target]) => [code, { name, target, direction: "lte" }]));
   }
 
   function parseQuotes(raw) {
@@ -203,7 +213,7 @@
     try {
       await navigator.clipboard.writeText(JSON.stringify({
         ...pushKey, subscription: phoneSubscription.toJSON(),
-        targets: [...stocks].map(([code, stock]) => [code, stock.target]),
+        targets: [...stocks].map(([code, stock]) => [code, stock.target, stock.direction]),
       }));
       $("push-status").textContent = "已复制。请将整段配置粘贴到 GitHub 仓库密钥。";
     } catch {
@@ -246,7 +256,7 @@
   function persist() {
     try {
       localStorage.setItem(storageKey, JSON.stringify(
-        [...stocks].map(([code, { name, target }]) => [code, name, target])));
+        [...stocks].map(([code, { name, target, direction }]) => [code, name, target, direction])));
       return true;
     } catch {
       return false;
@@ -272,7 +282,7 @@
     for (const [code, stock] of stocks) {
       const quote = quotes.get(code);
       const ready = quote && !unavailable.has(code) && fresh(now, quote.stamp);
-      const hit = ready && quote.price <= stock.target;
+      const hit = ready && reached(quote.price, stock);
       const state = unavailable.has(code) ? "行情不可用" : !quote ? "等待报价" :
         ready ? (hit ? "已到价" : "观察中") : session(now) ? "报价过期" : "休市参考";
       const row = document.createElement("article");
@@ -291,7 +301,7 @@
       row.append(
         cell(code, quote?.name || stock.name || code),
         cell(quote ? "报价 " + beijingTime.format(quote.stamp) : "报价", quote ? money(quote.price) : "—", "number"),
-        cell("提醒价 · " + state, money(stock.target), hit ? "number hit" : "number"),
+        cell("提醒条件 · " + state, comparison(stock.direction) + " " + money(stock.target), hit ? "number hit" : "number"),
         actions,
       );
       list.append(row);
@@ -300,13 +310,13 @@
 
   function recordAlert(code, stock, quote) {
     const item = document.createElement("li");
-    item.textContent = `${beijingTime.format(quote.stamp)}  ${quote.name || stock.name || code} ${money(quote.price)} 元，提醒价 ${money(stock.target)} 元`;
+    item.textContent = `${beijingTime.format(quote.stamp)}  ${quote.name || stock.name || code} ${money(quote.price)} 元，提醒条件 ${comparison(stock.direction)} ${money(stock.target)} 元`;
     $("alert-list").prepend(item);
     if ($("alert-list").children.length > 30) $("alert-list").lastElementChild.remove();
     $("alerts").hidden = false;
     if (notificationWorker && Notification.permission === "granted") {
-      notificationWorker.showNotification("股价已到提醒价", {
-        body: item.textContent, icon: "./icon-192.png", tag: "stock-alert-" + code,
+      notificationWorker.showNotification(alertTitle(stock.direction), {
+        body: item.textContent, icon: "./icon-192.png", tag: "stock-alert-" + code + "-" + stock.direction,
       }).catch(() => {
         $("notification-status").textContent = "系统通知发送失败，仍可在页面查看到价提醒。";
       });
@@ -345,7 +355,7 @@
         if (!stock) continue;
         quotes.set(code, quote);
         if (!fresh(now, quote.stamp)) continue;
-        if (quote.price > stock.target) alerted.delete(code);
+        if (!reached(quote.price, stock)) alerted.delete(code);
         else if (!alerted.has(code)) {
           alerted.add(code);
           recordAlert(code, stock, quote);
@@ -376,8 +386,9 @@
       return;
     }
     const previous = stocks.get(code);
-    stocks.set(code, { name: previous?.name || "", target });
-    if (target !== previous?.target) alerted.delete(code);
+    const direction = $("direction").value === "gte" ? "gte" : "lte";
+    stocks.set(code, { name: previous?.name || "", target, direction });
+    if (target !== previous?.target || direction !== previous?.direction) alerted.delete(code);
     $("feedback").textContent = persist() ? "已保存。" : "浏览器存储不可用，本次设置仅保留在当前页面。";
     render();
     refresh();
@@ -392,6 +403,7 @@
     if (action === "edit") {
       $("code").value = code;
       $("threshold").value = money(stock.target);
+      $("direction").value = stock.direction;
       $("threshold").focus();
       return;
     }
@@ -401,6 +413,7 @@
     if ($("code").value === code) {
       $("code").value = "";
       $("threshold").value = "";
+      $("direction").value = "lte";
     }
     $("feedback").textContent = persist() ? "已取消监测。" : "已从当前页面移除，浏览器无法保存。";
     render();
