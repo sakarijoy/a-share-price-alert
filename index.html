@@ -17,10 +17,16 @@
     h1 { font-size: clamp(25px, 6vw, 38px); line-height: 1.2; }
     h2 { font-size: 19px; }
     header p { color: #c8e2e1; margin-top: 8px; }
-    section, #stock-editor { background: #fff; border: 1px solid #d5e2e1; border-radius: 14px; margin-top: 14px; padding: 15px; }
-    #stock-editor summary { cursor: pointer; font-weight: 700; }
+    section { background: #fff; border: 1px solid #d5e2e1; border-radius: 14px; margin-top: 14px; padding: 15px; }
+    .header-title { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+    #open-editor { flex-shrink: 0; font-size: 14px; }
+    #stock-editor { width: min(420px, calc(100% - 24px)); max-height: calc(100% - 24px); overflow: auto; border: 1px solid #d5e2e1; border-radius: 14px; padding: 16px; color: inherit; }
+    #stock-editor::backdrop { background: #122b3b90; }
     details p { overflow-wrap: anywhere; }
-    form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.4fr) auto; gap: 9px; align-items: end; margin-top: 12px; }
+    form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; align-items: end; margin-top: 12px; }
+    form label:last-of-type, form button, #editor-error { grid-column: 1 / -1; }
+    #editor-error { color: #a32c24; font-size: 14px; }
+    #editor-error:empty { display: none; }
     label { display: grid; gap: 4px; min-width: 0; font-size: 14px; }
     input, select, button { min-height: 42px; border-radius: 8px; font: inherit; }
     input, select { width: 100%; min-width: 0; font-size: 16px; border: 1px solid #aebfbe; padding: 7px 9px; background: white; color: inherit; }
@@ -40,9 +46,8 @@
     #alert-list { margin: 8px 0 0; padding-left: 22px; }
     @media (max-width: 520px) {
       header { padding: 18px; }
-      form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      form label:last-of-type { grid-column: 1 / -1; }
-      form button { grid-column: 1 / -1; }
+      h1 { font-size: clamp(18px, 5vw, 25px); }
+      #open-editor { font-size: 13px; padding-inline: 8px; }
       .row { grid-template-columns: minmax(0, 1.2fr) repeat(2, minmax(0, 1fr)); }
       .actions { grid-column: 1 / -1; }
     }
@@ -51,15 +56,21 @@
 <body>
 <main>
   <header>
-    <h1>A 股到价提醒</h1>
+    <div class="header-title">
+      <h1>A 股到价提醒</h1>
+      <button id="open-editor" type="button" aria-haspopup="dialog">添加或更新股票</button>
+    </div>
     <p>盘中报价满足你设置的价格条件时，页面会提示。</p>
   </header>
   <section id="alerts" aria-live="polite" hidden>
     <div class="toolbar"><h2>到价提醒</h2><button id="clear" type="button">清除</button></div>
     <ul id="alert-list"></ul>
   </section>
-  <details id="stock-editor">
-    <summary id="editor-summary">添加或更新股票</summary>
+  <dialog id="stock-editor" aria-labelledby="editor-title">
+    <div class="toolbar">
+      <h2 id="editor-title">添加或更新股票</h2>
+      <button id="close-editor" type="button" autofocus>取消</button>
+    </div>
     <form id="settings">
     <label>沪深 A 股代码<input id="code" inputmode="numeric" maxlength="6" placeholder="例如 600941" required></label>
     <label>提醒价（元）<input id="threshold" inputmode="decimal" placeholder="例如 98.00" required></label>
@@ -68,8 +79,9 @@
       <option value="gte">≥ 提醒价（卖出提醒）</option>
     </select></label>
     <button type="submit">添加或更新</button>
+    <p id="editor-error" role="alert"></p>
     </form>
-  </details>
+  </dialog>
   <p id="feedback" role="status"></p>
   <section>
     <div class="toolbar"><h2>自选股票</h2><button id="refresh" type="button">立即刷新</button></div>
@@ -388,13 +400,24 @@
     }
   }
 
+  function openEditor(code = "", stock = null) {
+    $("code").value = code;
+    $("threshold").value = stock ? money(stock.target) : "";
+    $("direction").value = stock?.direction || "lte";
+    $("editor-error").textContent = "";
+    $("stock-editor").showModal();
+  }
+
+  $("open-editor").addEventListener("click", () => openEditor());
+  $("close-editor").addEventListener("click", () => $("stock-editor").close());
+
   $("settings").addEventListener("submit", (event) => {
     event.preventDefault();
     const code = $("code").value.trim();
     const input = $("threshold").value.trim();
     const target = Number(input);
     if (!symbolFor(code) || !/^\d+(?:\.\d{1,2})?$/.test(input) || !validPrice(target)) {
-      $("feedback").textContent = "请输入沪深六位股票代码和大于零的提醒价（最多两位小数）。";
+      $("editor-error").textContent = "请输入沪深六位股票代码和大于零的提醒价（最多两位小数）。";
       return;
     }
     const previous = stocks.get(code);
@@ -402,8 +425,7 @@
     stocks.set(code, { name: previous?.name || "", target, direction });
     if (target !== previous?.target || direction !== previous?.direction) alerted.delete(code);
     $("feedback").textContent = persist() ? "已保存。" : "浏览器存储不可用，本次设置仅保留在当前页面。";
-    $("stock-editor").open = false;
-    $("editor-summary").focus({ preventScroll: true });
+    $("stock-editor").close();
     render();
     refresh();
   });
@@ -415,11 +437,7 @@
     const stock = stocks.get(code);
     if (!stock) return;
     if (action === "edit") {
-      $("stock-editor").open = true;
-      $("code").value = code;
-      $("threshold").value = money(stock.target);
-      $("direction").value = stock.direction;
-      $("editor-summary").scrollIntoView({ block: "nearest" });
+      openEditor(code, stock);
       return;
     }
     stocks.delete(code);
